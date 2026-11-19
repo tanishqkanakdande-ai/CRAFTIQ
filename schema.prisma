@@ -1,0 +1,268 @@
+// CraftIQ database schema (Prisma). The prototype runs on mock data and localStorage;
+// this schema is what the API routes move to in production.
+// Setup: npm i -D prisma && npm i @prisma/client && npx prisma migrate dev
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite" // switch to "postgresql" for production
+  url      = env("DATABASE_URL")
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum SkillLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum ProjectSource {
+  STARTER
+  COMMUNITY
+  AI
+}
+
+enum SafetyLevel {
+  INFO
+  CAUTION
+  DANGER
+}
+
+model User {
+  id          String     @id @default(cuid())
+  email       String     @unique
+  name        String
+  image       String?
+  skillLevel  SkillLevel @default(BEGINNER)
+  country     String?
+  currency    String     @default("USD")
+  interests   String     @default("[]") // JSON array of categories (use String[] on Postgres)
+  tools       String     @default("[]") // JSON array of tool keys
+  onboardedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  accounts      Account[]
+  projects      Project[]       @relation("AuthoredProjects")
+  savedProjects SavedProject[]
+  bookmarks     SavedComponent[]
+}
+
+/// OAuth / credentials accounts (Auth.js compatible), e.g. provider = "google" or "credentials".
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  provider          String
+  providerAccountId String
+  passwordHash      String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Category {
+  id       String            @id @default(cuid())
+  name     String            @unique
+  projects ProjectCategory[]
+}
+
+/// A build plan: starter, community-shared or AI-generated.
+model Project {
+  id                  String        @id @default(cuid())
+  slug                String        @unique
+  title               String
+  tagline             String
+  emoji               String        @default("⚡")
+  overview            String
+  howItWorks          String
+  difficulty          Difficulty
+  timeHours           Float
+  retailProduct       String
+  retailPriceUSD      Float
+  source              ProjectSource @default(AI)
+  idea                String? // original prompt for AI plans
+  preferences         String? // JSON BuildPreferences used to generate it
+  mentorNote          String?
+  hazards             String        @default("[]") // JSON array of hazard tags
+  wiringSummary       String
+  wiringNotes         String        @default("[]")
+  testing             String        @default("[]")
+  upgrades            String        @default("[]")
+  coverFrom           String        @default("#3b82f6")
+  coverTo             String        @default("#8b5cf6")
+  likes               Int           @default(0)
+  isPublic            Boolean       @default(false)
+  authorId            String?
+  parentId            String? // set when a plan is improved from another plan
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  author          User?                @relation("AuthoredProjects", fields: [authorId], references: [id], onDelete: SetNull)
+  parent          Project?             @relation("Revisions", fields: [parentId], references: [id])
+  revisions       Project[]            @relation("Revisions")
+  categories      ProjectCategory[]
+  components      ProjectComponent[]
+  tools           ProjectTool[]
+  connections     WiringConnection[]
+  steps           TutorialStep[]
+  safetyWarnings  SafetyWarning[]
+  troubleshooting TroubleshootItem[]
+  savedBy         SavedProject[]
+
+  @@index([source, difficulty])
+}
+
+model ProjectCategory {
+  projectId  String
+  categoryId String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, categoryId])
+}
+
+/// Reusable catalogue of parts (shared across projects).
+model Component {
+  id           String  @id @default(cuid())
+  name         String
+  description  String?
+  typicalUSD   Float
+  searchQuery  String?
+  isHousehold  Boolean @default(false)
+
+  usages       ProjectComponent[]
+  alternatives ComponentAlternative[] @relation("AlternativeOf")
+  bookmarks    SavedComponent[]
+}
+
+model ComponentAlternative {
+  id          String    @id @default(cuid())
+  componentId String
+  name        String
+  priceUSD    Float?
+  note        String
+  household   Boolean   @default(false)
+  component   Component @relation("AlternativeOf", fields: [componentId], references: [id], onDelete: Cascade)
+}
+
+/// A part line in a specific project's bill of materials.
+model ProjectComponent {
+  id           String    @id @default(cuid())
+  projectId    String
+  componentId  String
+  key          String // stable id used by progress tracking, e.g. "c_lens"
+  qty          Int       @default(1)
+  unitPriceUSD Float
+  purpose      String
+  optional     Boolean   @default(false)
+  sortOrder    Int       @default(0)
+  project      Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  component    Component @relation(fields: [componentId], references: [id])
+
+  @@unique([projectId, key])
+}
+
+model ProjectTool {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String
+  optional  Boolean @default(false)
+  note      String?
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model WiringConnection {
+  id        String  @id @default(cuid())
+  projectId String
+  fromNode  String
+  fromPin   String
+  toNode    String
+  toPin     String
+  wireColor String
+  note      String?
+  sortOrder Int     @default(0)
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model TutorialStep {
+  id        String  @id @default(cuid())
+  projectId String
+  key       String // stable id used by progress tracking, e.g. "s3"
+  position  Int
+  title     String
+  detail    String
+  minutes   Int
+  tip       String?
+  warning   String?
+  project   Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  progress  StepProgress[]
+
+  @@unique([projectId, key])
+}
+
+model SafetyWarning {
+  id               String      @id @default(cuid())
+  projectId        String
+  level            SafetyLevel
+  hazard           String?
+  title            String
+  detail           String
+  saferAlternative String?
+  project          Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model TroubleshootItem {
+  id        String  @id @default(cuid())
+  projectId String
+  problem   String
+  fix       String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// A user's copy of a project with their progress.
+model SavedProject {
+  id           String         @id @default(cuid())
+  userId       String
+  projectId    String
+  notes        String         @default("")
+  checkedItems String         @default("[]") // JSON array of ProjectComponent.key
+  savedAt      DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  completedAt  DateTime?
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  steps        StepProgress[]
+
+  @@unique([userId, projectId])
+}
+
+model StepProgress {
+  id             String       @id @default(cuid())
+  savedProjectId String
+  stepId         String
+  completedAt    DateTime     @default(now())
+  savedProject   SavedProject @relation(fields: [savedProjectId], references: [id], onDelete: Cascade)
+  step           TutorialStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@unique([savedProjectId, stepId])
+}
+
+/// Bookmarked components ("saved items").
+model SavedComponent {
+  id          String    @id @default(cuid())
+  userId      String
+  componentId String
+  projectId   String?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  component   Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, componentId, projectId])
+}
